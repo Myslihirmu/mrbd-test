@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- Locked viewport: the MRBD display is a fixed 600x600 surface with no scroll/zoom. -->
+<meta name="viewport" content="width=600,height=600,initial-scale=1,user-scalable=no">
+<!-- Declares this as a Meta Ray-Ban Display web app. -->
+<meta name="mrbd-web-app-capable" content="yes">
+<meta name="description" content="MRBD Test Suite — exercises every device capability of the Meta Ray-Ban Display glasses: the five Neural Band keys, IMU motion/gyroscope, compass, GPS location & speed, the additive display, and local storage.">
+<title>MRBD Test Suite</title>
+<style>
+  /*
+   * DESIGN NOTES (why, not syntax):
+   * - The display is ADDITIVE see-through: #000 = fully transparent. So the page is black
+   *   and content uses bright, saturated strokes/text (cyan/green/amber). We avoid large
+   *   bright fills everywhere EXCEPT the Display test, where glare is the thing being tested.
+   * - Everything lives inside a hard 600x600 box with overflow hidden. Each screen is sized
+   *   to fit without scrolling, because the glasses cannot scroll.
+   * - Monospace + generous sizes (>=16px, primary >=24px) for legibility on-lens.
+   */
+  :root{
+    --cyan:#19f0ff;       /* primary text / chrome */
+    --cyan-dim:#0a8c96;   /* secondary labels */
+    --green:#39ff88;      /* success / active */
+    --amber:#ffb000;      /* highlight / warnings */
+    --red:#ff4d4d;        /* errors */
+    --magenta:#ff5cf0;
+    --line:#0e5c63;       /* faint structural lines */
+    --bg:#000;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{
+    width:100%;height:100%;
+    background:#000;            /* outside the lens box, also black */
+    overflow:hidden;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color:var(--cyan);
+    -webkit-user-select:none;user-select:none;
+    display:flex;align-items:center;justify-content:center;
+  }
+  /* The lens: exactly the device surface. Centered so it also tests cleanly in a browser. */
+  #lens{
+    width:600px;height:600px;
+    background:var(--bg);
+    overflow:hidden;position:relative;
+    display:flex;flex-direction:column;
+  }
+  header{
+    flex:0 0 auto;padding:12px 18px 8px;
+    border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:baseline;
+  }
+  header .title{font-size:24px;color:var(--cyan);letter-spacing:1px}
+  header .crumb{font-size:16px;color:var(--amber)}
+  #content{flex:1 1 auto;position:relative;overflow:hidden;padding:14px 18px}
+  footer{
+    flex:0 0 auto;border-top:1px solid var(--line);
+    padding:8px 18px 12px;font-size:16px;
+  }
+  footer .hint{color:var(--cyan-dim)}
+  footer .hint b{color:var(--green)}
+  footer .keystrip{margin-top:4px;color:var(--cyan)}
+  footer .keystrip .lk{color:var(--amber)}
+
+  /* ---- Home menu ---- */
+  .menu{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .menu .item{
+    border:1px solid var(--line);border-radius:8px;
+    padding:9px 14px;display:flex;justify-content:space-between;align-items:center;
+  }
+  .menu .item.sel{border-color:var(--green);background:rgba(57,255,136,0.06)}
+  .menu .item .name{font-size:24px}
+  .menu .item.sel .name{color:var(--green)}
+  .menu .item .desc{font-size:16px;color:var(--cyan-dim);max-width:260px;text-align:right;white-space:nowrap}
+
+  /* ---- Generic readout grid ---- */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dotted var(--line);padding-bottom:3px}
+  .row .k{font-size:16px;color:var(--cyan-dim)}
+  .row .v{font-size:20px;color:var(--cyan)}
+  .screen-title{font-size:22px;color:var(--amber);margin-bottom:10px}
+  .status{font-size:16px;margin-bottom:10px}
+  .status.ok{color:var(--green)}
+  .status.warn{color:var(--amber)}
+  .status.err{color:var(--red)}
+
+  /* ---- Gesture / keys diagram ---- */
+  .pad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+       gap:10px;width:380px;height:300px;margin:6px auto 0}
+  .cell{border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:4px}
+  .cell.spacer{border:none}
+  .cell .lbl{font-size:22px;color:var(--cyan)}
+  .cell .cnt{font-size:16px;color:var(--cyan-dim)}
+  .cell.hit{border-color:var(--green);background:rgba(57,255,136,0.12)}
+  .cell.hit .lbl{color:var(--green)}
+  .lastev{font-size:16px;color:var(--cyan-dim);text-align:center;margin-top:8px}
+  .lastev b{color:var(--amber)}
+
+  /* ---- Motion visuals ---- */
+  .viz-row{display:flex;gap:24px;justify-content:center;margin-bottom:10px}
+  .viz{width:140px;height:140px;position:relative}
+  .viz .cap{position:absolute;bottom:-2px;width:100%;text-align:center;font-size:16px;color:var(--cyan-dim)}
+  .ring{position:absolute;inset:0;border:1px solid var(--line);border-radius:50%}
+  .crosshair::before,.crosshair::after{content:"";position:absolute;background:var(--line)}
+  .crosshair::before{left:50%;top:8px;bottom:8px;width:1px;transform:translateX(-0.5px)}
+  .crosshair::after{top:50%;left:8px;right:8px;height:1px;transform:translateY(-0.5px)}
+  .bubble{position:absolute;width:18px;height:18px;border-radius:50%;
+          border:2px solid var(--green);left:50%;top:50%;transform:translate(-50%,-50%);
+          transition:transform .05s linear}
+  .needle{position:absolute;left:50%;top:50%;width:2px;height:56px;background:var(--amber);
+          transform-origin:bottom center;transform:translate(-50%,-100%);transition:transform .08s linear}
+  .nlabel{position:absolute;width:100%;text-align:center;font-size:14px;color:var(--cyan-dim);top:2px}
+
+  /* ---- Display test patterns ---- */
+  .pattern{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .pat-name{position:absolute;top:8px;left:0;right:0;text-align:center;font-size:18px;color:var(--amber);z-index:5}
+  .pat-warn{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:16px;color:var(--red);z-index:5}
+  .bars{display:flex;width:100%;height:70%}
+  .bars span{flex:1}
+  .ladder{display:flex;flex-direction:column;gap:6px;color:var(--cyan)}
+  .safezone{position:absolute;inset:24px;border:1px solid var(--green)}
+  .thirds::before,.thirds::after{content:"";position:absolute;background:var(--line)}
+  .center-dot{width:10px;height:10px;border-radius:50%;background:var(--cyan)}
+  .big{font-size:120px;line-height:1;color:var(--green)}
+
+  /* ---- Audio test ---- */
+  .freqval{font-size:56px;color:var(--green);text-align:center;margin:6px 0 16px}
+  .panbar{position:relative;height:38px;border:1px solid var(--line);border-radius:19px;
+          margin:0 6px 4px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+  .panbar .pl,.panbar .pr{font-size:18px;color:var(--cyan-dim)}
+  .pandot{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--amber);
+          top:50%;left:50%;transform:translate(-50%,-50%);transition:left .05s linear}
+  .pancap{text-align:center;font-size:16px;color:var(--cyan-dim);margin-bottom:14px}
+</style>
+</head>
+<body>
+<div id="lens">
+  <header>
+    <span class="title">MRBD TEST SUITE</span>
+    <span class="crumb" id="crumb">Home</span>
+  </header>
+  <div id="content"><!-- screens render here --></div>
+  <footer>
+    <div class="hint" id="hint">↑↓ Move · Enter Open</div>
+    <div class="keystrip">last key: <span class="lk" id="lastkey">—</span> · presses: <span id="totalpresses">0</span></div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+ * MRBD Test Suite — single-file, no backend, no secrets.
+ *
+ * State machine of "screens". Navigation uses ONLY the 5 keys the glasses
+ * emit (the Neural Band maps swipes/pinches to ArrowUp/Down/Left/Right/Enter).
+ *
+ * Convention:
+ *   Home:        Up/Down select, Enter opens.
+ *   Most tests:  Left = back to Home; other keys do test-specific things.
+ *   Gesture test exception: Left must remain testable there, so it does NOT
+ *     navigate; you exit that screen with a DOUBLE Enter instead. This is the
+ *     only overloaded key, and it's shown in the on-screen hint.
+ * ========================================================================= */
+
+const KEYS = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Enter"];
+
+const SCREENS = [
+  {id:"gesture", name:"Gesture & Keys", desc:"5 Neural Band keys"},
+  {id:"motion",  name:"Motion / IMU",   desc:"Accel + gyro"},
+  {id:"orient",  name:"Orientation",    desc:"Tilt + compass"},
+  {id:"gps",     name:"GPS & Speed",    desc:"Location & speed"},
+  {id:"audio",   name:"Audio Output",   desc:"Speaker / tone test"},
+  {id:"display", name:"Display & Color",desc:"Display patterns"},
+  {id:"storage", name:"Storage",        desc:"Persistence test"},
+  {id:"info",    name:"Device Info",    desc:"Environment"},
+];
+
+const S = {
+  screen:"home",
+  menuIndex:0,
+  keyCounts:{ArrowUp:0,ArrowDown:0,ArrowLeft:0,ArrowRight:0,Enter:0},
+  totalPresses:0,
+  lastKey:"—",
+  // live sensor buffers (latest reading; painted by a rAF loop while relevant)
+  motion:{ax:null,ay:null,az:null,lx:null,ly:null,lz:null,rr_a:null,rr_b:null,rr_g:null,interval:null,got:false},
+  orient:{alpha:null,beta:null,gamma:null,compass:null,got:false},
+  // gps
+  gps:{watchId:null,fix:null,prev:null,calcSpeed:null,updates:0,error:null},
+  // audio output probe (Web Audio API)
+  audio:{ctx:null,osc:null,gain:null,pan:null,playing:false,freq:440},
+  // display test
+  patternIndex:0,
+  // gesture exit
+  lastEnter:0,
+  // raf
+  raf:null,
+  motionAttached:false,
+};
+
+const content = document.getElementById("content");
+const crumb = document.getElementById("crumb");
+const hint = document.getElementById("hint");
+const lastkeyEl = document.getElementById("lastkey");
+const totalEl = document.getElementById("totalpresses");
+
+/* ---------- small helpers ---------- */
+const el = (id) => document.getElementById(id);
+function fmt(n, d=2){ return (n===null||n===undefined||Number.isNaN(n)) ? "—" : Number(n).toFixed(d); }
+function deg(n){ return (n===null||n===undefined) ? "—" : Math.round(n)+"°"; }
+
+/* =========================================================================
+ * INPUT — the single source of truth for all interaction.
+ * ========================================================================= */
+window.addEventListener("keydown",(e)=>{
+  if(!KEYS.includes(e.key)) return;
+  e.preventDefault();          // arrows must not scroll / move focus
+  registerKey(e.key);
+  dispatch(e.key);
+},{passive:false});
+
+function registerKey(k){
+  S.keyCounts[k]++;
+  S.totalPresses++;
+  S.lastKey=k;
+  lastkeyEl.textContent=k;
+  totalEl.textContent=S.totalPresses;
+}
+
+function dispatch(k){
+  switch(S.screen){
+    case "home":    return onHome(k);
+    case "gesture": return onGesture(k);
+    case "motion":  return onMotionScreen(k);
+    case "orient":  return onMotionScreen(k); // shares back/enable handling
+    case "gps":     return onGps(k);
+    case "audio":   return onAudio(k);
+    case "display": return onDisplay(k);
+    case "storage": return onStorage(k);
+    case "info":    return onInfo(k);
+  }
+}
+
+/* =========================================================================
+ * NAVIGATION
+ * ========================================================================= */
+function navigateTo(id){
+  teardown(S.screen);   // stop sensors/loops from the screen we are leaving
+  S.screen=id;
+  const meta = SCREENS.find(s=>s.id===id);
+  crumb.textContent = id==="home" ? "Home" : (meta?meta.name:id);
+  render();
+}
+function goHome(){ navigateTo("home"); }
+
+function teardown(prev){
+  if(S.raf){ cancelAnimationFrame(S.raf); S.raf=null; }
+  if((prev==="motion"||prev==="orient") && S.motionAttached){
+    window.removeEventListener("devicemotion",onDeviceMotion);
+    window.removeEventListener("deviceorientation",onDeviceOrientation);
+    S.motionAttached=false;
+  }
+  if(prev==="gps" && S.gps.watchId!==null){
+    navigator.geolocation.clearWatch(S.gps.watchId);
+    S.gps.watchId=null;
+  }
+  if(prev==="audio"){ stopTone(); }   // never let a tone keep playing off-screen
+}
+
+/* =========================================================================
+ * RENDER dispatcher
+ * ========================================================================= */
+function render(){
+  switch(S.screen){
+    case "home":    return renderHome();
+    case "gesture": return renderGesture();
+    case "motion":  return renderMotion();
+    case "orient":  return renderOrient();
+    case "gps":     return renderGps();
+    case "audio":   return renderAudio();
+    case "display": return renderDisplay();
+    case "storage": return renderStorage();
+    case "info":    return renderInfo();
+  }
+}
+function setHint(h){ hint.innerHTML=h; }
+
+/* =========================================================================
+ * HOME
+ * ========================================================================= */
+function renderHome(){
+  setHint("↑↓ Move · <b>Enter</b> Open");
+  let html='<div class="menu">';
+  SCREENS.forEach((s,i)=>{
+    html+=`<div class="item ${i===S.menuIndex?'sel':''}">
+      <span class="name">${s.name}</span><span class="desc">${s.desc}</span></div>`;
+  });
+  html+='</div>';
+  content.innerHTML=html;
+}
+function onHome(k){
+  if(k==="ArrowUp"){ S.menuIndex=(S.menuIndex-1+SCREENS.length)%SCREENS.length; renderHome(); }
+  else if(k==="ArrowDown"){ S.menuIndex=(S.menuIndex+1)%SCREENS.length; renderHome(); }
+  else if(k==="Enter"||k==="ArrowRight"){ navigateTo(SCREENS[S.menuIndex].id); }
+}
+
+/* =========================================================================
+ * GESTURE & KEYS  — proves all 5 inputs fire; exit via double-Enter.
+ * ========================================================================= */
+function renderGesture(){
+  setHint("Press any key to test · <b>Enter ×2</b> = Back");
+  content.innerHTML=`
+    <div class="pad">
+      ${cell("spacer")}${cell("ArrowUp","▲ Up")}${cell("spacer")}
+      ${cell("ArrowLeft","◀ Left")}${cell("Enter","● Enter")}${cell("ArrowRight","Right ▶")}
+      ${cell("spacer")}${cell("ArrowDown","▼ Down")}${cell("spacer")}
+    </div>
+    <div class="lastev" id="lastev">waiting for input…</div>`;
+  paintGesture();
+}
+function cell(k,label){
+  if(k==="spacer") return '<div class="cell spacer"></div>';
+  return `<div class="cell" id="kc-${k}">
+            <span class="lbl">${label}</span>
+            <span class="cnt" id="cnt-${k}">0</span>
+          </div>`;
+}
+function paintGesture(){
+  KEYS.forEach(k=>{ const c=el("cnt-"+k); if(c) c.textContent=S.keyCounts[k]; });
+}
+function onGesture(k){
+  // flash the pressed cell
+  const cellEl=el("kc-"+k);
+  if(cellEl){ cellEl.classList.add("hit"); setTimeout(()=>cellEl.classList.remove("hit"),140); }
+  el("cnt-"+k) && (el("cnt-"+k).textContent=S.keyCounts[k]);
+  const ev=el("lastev");
+  if(ev) ev.innerHTML=`last: <b>${k}</b> · total presses on this key: <b>${S.keyCounts[k]}</b>`;
+
+  // double-Enter exits (single Enter still counts as a real test of the Enter key)
+  if(k==="Enter"){
+    const now=performance.now();
+    if(now-S.lastEnter<450){ goHome(); }
+    S.lastEnter=now;
+  }
+}
+
+/* =========================================================================
+ * MOTION / IMU  (accelerometer + gyroscope rotation rate)
+ * ========================================================================= */
+function renderMotion(){
+  setHint("◀ Back · <b>Enter</b> Enable sensors");
+  content.innerHTML=`
+    <div class="screen-title">Accelerometer & Gyroscope</div>
+    <div class="status warn" id="mstat">Press Enter to enable motion sensors.</div>
+    <div class="grid">
+      ${rrow("accel.x (g)","m-ax")}${rrow("rot α °/s","m-ra")}
+      ${rrow("accel.y (g)","m-ay")}${rrow("rot β °/s","m-rb")}
+      ${rrow("accel.z (g)","m-az")}${rrow("rot γ °/s","m-rg")}
+      ${rrow("linear.x","m-lx")}${rrow("linear.y","m-ly")}
+      ${rrow("linear.z","m-lz")}${rrow("interval ms","m-int")}
+    </div>`;
+  startLoop(paintMotion);
+}
+function renderOrient(){
+  setHint("◀ Back · <b>Enter</b> Enable sensors");
+  content.innerHTML=`
+    <div class="screen-title">Tilt & Compass</div>
+    <div class="status warn" id="mstat">Press Enter to enable orientation sensors.</div>
+    <div class="viz-row">
+      <div class="viz">
+        <div class="ring crosshair"></div>
+        <div class="bubble" id="o-bubble"></div>
+        <div class="cap">tilt (β/γ)</div>
+      </div>
+      <div class="viz">
+        <div class="ring"></div>
+        <div class="nlabel">N</div>
+        <div class="needle" id="o-needle"></div>
+        <div class="cap">compass</div>
+      </div>
+    </div>
+    <div class="grid">
+      ${rrow("alpha (Z) °","o-a")}${rrow("beta (X) °","o-b")}
+      ${rrow("gamma (Y) °","o-g")}${rrow("heading °","o-h")}
+    </div>`;
+  startLoop(paintOrient);
+}
+function rrow(label,id){ return `<div class="row"><span class="k">${label}</span><span class="v" id="${id}">—</span></div>`; }
+
+function onMotionScreen(k){
+  if(k==="ArrowLeft") return goHome();
+  if(k==="Enter") return enableMotion();
+}
+
+async function enableMotion(){
+  const stat=el("mstat");
+  try{
+    // iOS / WebKit require an explicit permission request triggered by a user gesture.
+    // On the glasses (and most Android/desktop) these functions don't exist; we just attach.
+    if(typeof DeviceMotionEvent!=="undefined" && typeof DeviceMotionEvent.requestPermission==="function"){
+      const r=await DeviceMotionEvent.requestPermission();
+      if(r!=="granted") throw new Error("motion permission "+r);
+    }
+    if(typeof DeviceOrientationEvent!=="undefined" && typeof DeviceOrientationEvent.requestPermission==="function"){
+      await DeviceOrientationEvent.requestPermission();
+    }
+    if(!S.motionAttached){
+      window.addEventListener("devicemotion",onDeviceMotion);
+      window.addEventListener("deviceorientation",onDeviceOrientation);
+      S.motionAttached=true;
+    }
+    if(stat){ stat.className="status ok"; stat.textContent="Sensors enabled — move the glasses…"; }
+    // If no event arrives shortly, the platform likely lacks IMU access.
+    setTimeout(()=>{
+      const got = S.motion.got || S.orient.got;
+      if(!got && stat){ stat.className="status err"; stat.textContent="No sensor data received (unsupported or blocked)."; }
+    },2500);
+  }catch(err){
+    if(stat){ stat.className="status err"; stat.textContent="Error: "+err.message; }
+  }
+}
+function onDeviceMotion(e){
+  const m=S.motion; m.got=true;
+  const ag=e.accelerationIncludingGravity||{}, a=e.acceleration||{}, r=e.rotationRate||{};
+  m.ax=ag.x; m.ay=ag.y; m.az=ag.z;
+  m.lx=a.x; m.ly=a.y; m.lz=a.z;
+  m.rr_a=r.alpha; m.rr_b=r.beta; m.rr_g=r.gamma;
+  m.interval=e.interval;
+}
+function onDeviceOrientation(e){
+  const o=S.orient; o.got=true;
+  o.alpha=e.alpha; o.beta=e.beta; o.gamma=e.gamma;
+  // iOS exposes a true compass heading; elsewhere approximate from alpha.
+  o.compass = (typeof e.webkitCompassHeading==="number")
+      ? e.webkitCompassHeading
+      : (e.alpha!=null ? (360-e.alpha)%360 : null);
+}
+function paintMotion(){
+  const m=S.motion;
+  set("m-ax",fmt(m.ax)); set("m-ay",fmt(m.ay)); set("m-az",fmt(m.az));
+  set("m-lx",fmt(m.lx)); set("m-ly",fmt(m.ly)); set("m-lz",fmt(m.lz));
+  set("m-ra",fmt(m.rr_a,1)); set("m-rb",fmt(m.rr_b,1)); set("m-rg",fmt(m.rr_g,1));
+  set("m-int",fmt(m.interval,0));
+}
+function paintOrient(){
+  const o=S.orient;
+  set("o-a",deg(o.alpha)); set("o-b",deg(o.beta)); set("o-g",deg(o.gamma)); set("o-h",deg(o.compass));
+  const bub=el("o-bubble");
+  if(bub){ // map tilt to a bubble offset, clamped to the ring
+    const x=Math.max(-55,Math.min(55,(o.gamma||0)));
+    const y=Math.max(-55,Math.min(55,(o.beta||0)));
+    bub.style.transform=`translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+  }
+  const nd=el("o-needle");
+  if(nd){ nd.style.transform=`translate(-50%,-100%) rotate(${o.compass||0}deg)`; }
+}
+function set(id,v){ const e=el(id); if(e) e.textContent=v; }
+function startLoop(paintFn){
+  const tick=()=>{ paintFn(); S.raf=requestAnimationFrame(tick); };
+  S.raf=requestAnimationFrame(tick);
+}
+
+/* =========================================================================
+ * GPS & SPEED
+ * ========================================================================= */
+function renderGps(){
+  setHint("◀ Back · <b>Enter</b> Start/Stop");
+  content.innerHTML=`
+    <div class="screen-title">Location & Speed</div>
+    <div class="status warn" id="gstat">Press Enter to start GPS.</div>
+    <div class="grid">
+      ${rrow("latitude","g-lat")}${rrow("longitude","g-lon")}
+      ${rrow("accuracy m","g-acc")}${rrow("altitude m","g-alt")}
+      ${rrow("speed km/h","g-spd")}${rrow("heading °","g-hdg")}
+      ${rrow("calc km/h","g-cspd")}${rrow("updates","g-upd")}
+    </div>`;
+  // speed: coords.speed is often null, so we always show a haversine-derived fallback.
+}
+function onGps(k){
+  if(k==="ArrowLeft") return goHome();
+  if(k==="Enter") return toggleGps();
+}
+function toggleGps(){
+  const stat=el("gstat");
+  if(S.gps.watchId!==null){
+    navigator.geolocation.clearWatch(S.gps.watchId);
+    S.gps.watchId=null;
+    if(stat){ stat.className="status warn"; stat.textContent="GPS stopped. Enter to restart."; }
+    return;
+  }
+  if(!("geolocation" in navigator)){
+    if(stat){ stat.className="status err"; stat.textContent="Geolocation not supported."; }
+    return;
+  }
+  if(stat){ stat.className="status warn"; stat.textContent="Acquiring fix…"; }
+  S.gps.prev=null; S.gps.updates=0;
+  S.gps.watchId=navigator.geolocation.watchPosition(onGpsFix,onGpsErr,{
+    enableHighAccuracy:true, maximumAge:0, timeout:15000
+  });
+}
+function onGpsFix(pos){
+  const c=pos.coords; S.gps.updates++;
+  const stat=el("gstat");
+  if(stat){ stat.className="status ok"; stat.textContent="Tracking — Enter to stop."; }
+  set("g-lat",fmt(c.latitude,5)); set("g-lon",fmt(c.longitude,5));
+  set("g-acc",fmt(c.accuracy,0)); set("g-alt",fmt(c.altitude,0));
+  set("g-spd", c.speed!=null ? fmt(c.speed*3.6,1) : "—");   // m/s -> km/h
+  set("g-hdg", c.heading!=null ? deg(c.heading) : "—");
+  set("g-upd", S.gps.updates);
+  // Fallback speed from successive fixes (haversine / dt).
+  const now=pos.timestamp;
+  if(S.gps.prev){
+    const d=haversine(S.gps.prev.lat,S.gps.prev.lon,c.latitude,c.longitude);
+    const dt=(now-S.gps.prev.t)/1000;
+    if(dt>0){ const kmh=(d/dt)*3.6; set("g-cspd",fmt(kmh,1)); }
+  }
+  S.gps.prev={lat:c.latitude,lon:c.longitude,t:now};
+}
+function onGpsErr(err){
+  const stat=el("gstat");
+  const map={1:"permission denied",2:"position unavailable",3:"timeout"};
+  if(stat){ stat.className="status err"; stat.textContent="GPS error: "+(map[err.code]||err.message); }
+}
+function haversine(la1,lo1,la2,lo2){
+  const R=6371000,toR=Math.PI/180;
+  const dLa=(la2-la1)*toR,dLo=(lo2-lo1)*toR;
+  const a=Math.sin(dLa/2)**2+Math.cos(la1*toR)*Math.cos(la2*toR)*Math.sin(dLo/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a)); // metres
+}
+
+/* =========================================================================
+ * AUDIO OUTPUT  — probe whether the glasses' speakers can be driven.
+ *
+ * Pure Web Audio API (oscillator -> gain -> stereo panner -> destination).
+ * Needs no permission, but a browser AudioContext can only START from a user
+ * gesture — so it's created/resumed on the Enter press, never on render.
+ * The AudioContext.state readout is the real diagnostic: if it stays
+ * "suspended"/"interrupted" instead of "running", the sandbox is blocking output.
+ * ========================================================================= */
+function renderAudio(){
+  setHint("◀ Back · ↑↓ Frequency · <b>Enter</b> Play/Stop");
+  const supported = !!(window.AudioContext||window.webkitAudioContext);
+  content.innerHTML=`
+    <div class="screen-title">Audio Output (speaker test)</div>
+    <div class="status warn" id="astat">${supported?"Press Enter to play a test tone.":"Web Audio API not supported."}</div>
+    <div class="freqval" id="a-freq">${S.audio.freq} Hz</div>
+    <div class="panbar"><span class="pl">L</span><div class="pandot" id="a-dot"></div><span class="pr">R</span></div>
+    <div class="pancap">stereo auto-pan while playing</div>
+    <div class="grid">
+      ${rrow("playing","a-play")}${rrow("context state","a-state")}
+      ${rrow("volume","a-vol")}${rrow("Web Audio","a-sup")}
+    </div>`;
+  set("a-sup", supported?"yes":"no");
+  startLoop(paintAudio);
+}
+function onAudio(k){
+  if(k==="ArrowLeft") return goHome();
+  if(k==="Enter")     return toggleTone();
+  if(k==="ArrowUp")   return changeFreq(110);
+  if(k==="ArrowDown") return changeFreq(-110);
+}
+function changeFreq(d){
+  const a=S.audio;
+  a.freq=Math.max(110,Math.min(1980,a.freq+d));
+  if(a.playing&&a.osc&&a.ctx) a.osc.frequency.setValueAtTime(a.freq,a.ctx.currentTime);
+  set("a-freq",a.freq+" Hz");
+}
+function toggleTone(){
+  const a=S.audio, stat=el("astat");
+  if(a.playing){ stopTone(); if(stat){stat.className="status warn";stat.textContent="Stopped. Enter to play again.";} return; }
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC){ if(stat){stat.className="status err";stat.textContent="Web Audio not supported.";} return; }
+    if(!a.ctx) a.ctx=new AC();
+    if(a.ctx.state==="suspended") a.ctx.resume();
+    const ctx=a.ctx;
+    a.osc=ctx.createOscillator(); a.osc.type="sine";
+    a.osc.frequency.setValueAtTime(a.freq,ctx.currentTime);
+    a.gain=ctx.createGain();      // soft fade-in avoids a click; modest level for open-ear speakers
+    a.gain.gain.setValueAtTime(0.0001,ctx.currentTime);
+    a.gain.gain.exponentialRampToValueAtTime(0.15,ctx.currentTime+0.05);
+    if(ctx.createStereoPanner){ a.pan=ctx.createStereoPanner(); a.osc.connect(a.gain); a.gain.connect(a.pan); a.pan.connect(ctx.destination); }
+    else { a.pan=null; a.osc.connect(a.gain); a.gain.connect(ctx.destination); }
+    a.osc.start();
+    a.playing=true;
+    if(stat){ stat.className="status ok"; stat.textContent="Playing — do you hear it on the glasses?"; }
+    // If the context refuses to run, that's the definitive "output blocked" signal.
+    setTimeout(()=>{ if(a.ctx&&a.ctx.state!=="running"&&stat){ stat.className="status err"; stat.textContent="Context state: "+a.ctx.state+" — output likely blocked."; } },400);
+  }catch(err){ if(stat){stat.className="status err";stat.textContent="Error: "+err.message;} }
+}
+function stopTone(){
+  const a=S.audio;
+  try{ if(a.gain&&a.ctx){ a.gain.gain.cancelScheduledValues(a.ctx.currentTime); a.gain.gain.setValueAtTime(a.gain.gain.value||0.15,a.ctx.currentTime); a.gain.gain.exponentialRampToValueAtTime(0.0001,a.ctx.currentTime+0.05); } }catch(e){}
+  try{ if(a.osc) a.osc.stop((a.ctx?a.ctx.currentTime:0)+0.06); }catch(e){}
+  a.playing=false; a.osc=null;
+}
+function paintAudio(){
+  const a=S.audio;
+  set("a-play", a.playing?"yes":"no");
+  set("a-state", a.ctx?a.ctx.state:"—");
+  set("a-vol", a.playing?"15%":"—");
+  const dot=el("a-dot");
+  if(a.playing && a.pan && a.ctx){
+    const p=Math.sin(a.ctx.currentTime*2*Math.PI/3);   // ~3s left/right sweep
+    a.pan.pan.setValueAtTime(p,a.ctx.currentTime);
+    if(dot) dot.style.left=((p+1)/2*100)+"%";
+  } else if(dot){ dot.style.left="50%"; }
+}
+
+/* =========================================================================
+ * DISPLAY & COLOR  — verify the additive see-through behaviour.
+ * (This screen intentionally uses bright fills; that's what's being tested.)
+ * ========================================================================= */
+const PATTERNS=[
+  {name:"Safe-zone grid", warn:"", html:`
+     <div class="safezone"></div>
+     <div class="center-dot"></div>`},
+  {name:"Text size ladder", warn:"", html:`
+     <div class="ladder">
+       <span style="font-size:48px">48px Aa 0123</span>
+       <span style="font-size:32px">32px Aa 0123</span>
+       <span style="font-size:24px">24px Aa 0123 — primary</span>
+       <span style="font-size:20px">20px Aa 0123</span>
+       <span style="font-size:16px">16px Aa 0123 — minimum</span>
+     </div>`},
+  {name:"Color bars", warn:"bright — check glare over the world", html:`
+     <div class="bars">
+       <span style="background:#19f0ff"></span>
+       <span style="background:#39ff88"></span>
+       <span style="background:#ffb000"></span>
+       <span style="background:#ff4d4d"></span>
+       <span style="background:#ff5cf0"></span>
+       <span style="background:#4d6dff"></span>
+       <span style="background:#ffffff"></span>
+     </div>`},
+  {name:"Full white (glare test)", warn:"maximum glare — large bright fill", html:`
+     <div style="position:absolute;inset:40px;background:#fff"></div>`},
+  {name:"Full black (transparency)", warn:"should be fully see-through", html:`
+     <div class="big" style="color:var(--cyan-dim)">#000</div>`},
+];
+function renderDisplay(){
+  setHint("◀ Back · ↑↓ Change pattern");
+  paintPattern();
+}
+function paintPattern(){
+  const p=PATTERNS[S.patternIndex];
+  content.innerHTML=`
+    <div class="pat-name">${S.patternIndex+1}/${PATTERNS.length} · ${p.name}</div>
+    <div class="pattern">${p.html}</div>
+    ${p.warn?`<div class="pat-warn">${p.warn}</div>`:""}`;
+}
+function onDisplay(k){
+  if(k==="ArrowLeft") return goHome();
+  if(k==="ArrowUp"){ S.patternIndex=(S.patternIndex-1+PATTERNS.length)%PATTERNS.length; paintPattern(); }
+  if(k==="ArrowDown"||k==="Enter"){ S.patternIndex=(S.patternIndex+1)%PATTERNS.length; paintPattern(); }
+}
+
+/* =========================================================================
+ * STORAGE  — persistence across reloads/sessions.
+ * ========================================================================= */
+function renderStorage(){
+  setHint("◀ Back · ↑↓ Counter · <b>Enter</b> +1 & save");
+  content.innerHTML=`
+    <div class="screen-title">Local Storage</div>
+    <div class="status ok" id="sstat">localStorage available: ${("localStorage" in window)?"yes":"NO"}</div>
+    <div class="grid">
+      ${rrow("app launches","s-launch")}
+      ${rrow("saved counter","s-cnt")}
+      ${rrow("last saved","s-when")}
+      ${rrow("est. usage","s-usage")}
+      ${rrow("est. quota","s-quota")}
+      ${rrow("session hits","s-sess")}
+    </div>`;
+  set("s-launch", localStorage.getItem("mrbd_launches")||"0");
+  set("s-cnt", localStorage.getItem("mrbd_counter")||"0");
+  set("s-when", localStorage.getItem("mrbd_saved_at")||"never");
+  // sessionStorage demo: counts views within this tab session
+  const sv=(parseInt(sessionStorage.getItem("mrbd_sess")||"0",10)+1);
+  sessionStorage.setItem("mrbd_sess",sv); set("s-sess",sv);
+  if(navigator.storage&&navigator.storage.estimate){
+    navigator.storage.estimate().then(e=>{
+      set("s-usage",(e.usage/1024).toFixed(1)+" KB");
+      set("s-quota",(e.quota/1048576).toFixed(0)+" MB");
+    }).catch(()=>{});
+  }else{ set("s-usage","n/a"); set("s-quota","n/a"); }
+}
+function onStorage(k){
+  if(k==="ArrowLeft") return goHome();
+  let v=parseInt(localStorage.getItem("mrbd_counter")||"0",10);
+  if(k==="ArrowUp"||k==="Enter") v++;
+  else if(k==="ArrowDown") v--;
+  else return;
+  localStorage.setItem("mrbd_counter",String(v));
+  localStorage.setItem("mrbd_saved_at",new Date().toLocaleTimeString());
+  set("s-cnt",v); set("s-when",localStorage.getItem("mrbd_saved_at"));
+}
+
+/* =========================================================================
+ * DEVICE INFO  — read-only environment snapshot.
+ * ========================================================================= */
+function renderInfo(){
+  setHint("◀ Back");
+  const n=navigator, scn=screen;
+  const rows=[
+    ["secure ctx", window.isSecureContext?"yes ✓":"NO (sensors/GPS blocked)"],
+    ["viewport", `${innerWidth}×${innerHeight}`],
+    ["screen", `${scn.width}×${scn.height}`],
+    ["pixel ratio", devicePixelRatio],
+    ["online", n.onLine?"yes":"no"],
+    ["language", n.language],
+    ["platform", n.platform||"—"],
+    ["touch pts", n.maxTouchPoints],
+    ["geolocation", ("geolocation" in n)?"yes":"no"],
+    ["DeviceMotion", (typeof DeviceMotionEvent!=="undefined")?"yes":"no"],
+    ["DeviceOrient.", (typeof DeviceOrientationEvent!=="undefined")?"yes":"no"],
+    ["Web Audio", (window.AudioContext||window.webkitAudioContext)?"yes":"no"],
+    ["cookies", n.cookieEnabled?"yes":"no"],
+  ];
+  content.innerHTML=`
+    <div class="screen-title">Device Info</div>
+    <div class="grid">
+      ${rows.map(([k,v])=>`<div class="row"><span class="k">${k}</span><span class="v" style="font-size:18px">${v}</span></div>`).join("")}
+    </div>`;
+}
+function onInfo(k){ if(k==="ArrowLeft") goHome(); }
+
+/* =========================================================================
+ * BOOT
+ * ========================================================================= */
+(function boot(){
+  try{
+    const l=parseInt(localStorage.getItem("mrbd_launches")||"0",10)+1;
+    localStorage.setItem("mrbd_launches",String(l));
+  }catch(e){/* storage may be blocked; ignore */}
+  render();
+})();
+</script>
+</body>
+</html>
